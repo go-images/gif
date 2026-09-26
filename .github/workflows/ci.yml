@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# This repository is a FORK of Go's image/gif, so it does not carry the
+# org's 100% statement-coverage gate: most of the code and all but one of
+# the test files are Go's, and Go does not write its tests to that rule.
+# What is enforced instead is that Go's own suite passes unaltered and that
+# the one thing this fork changes has tests of its own -- see NOTICE.
+jobs:
+  gofmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"; echo "$unformatted"
+            exit 1
+          fi
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  # The fork's own reason to exist, named so a failure says which it was.
+  partial:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: partial decode
+        run: go test -run 'PartialRows|CompleteImageSays|Interlaced|Animation|BeforeTheFirstRow' -v ./
+
+  # Cross-compiling proves the code COMPILES for an architecture; it does not
+  # prove it computes the right answer there. A GIF is a byte stream whose screen
+  # and frame geometry is little-endian and whose pixels come out of an LZW
+  # decoder a variable number of bits at a time.
+  #
+  # s390x is BIG-ENDIAN and 386/arm are 32-bit, so between them these lanes
+  # cover both assumptions a byte-stream reader can carry without knowing it --
+  # and a format whose fields are LITTLE-endian is exactly where a big-endian
+  # lane earns its place.
+  arch-qemu:
+    name: arch ${{ matrix.goarch }} (${{ matrix.via }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goarch: riscv64, exec: "-exec=qemu-riscv64-static", via: qemu }
+          - { goarch: loong64, exec: "-exec=qemu-loongarch64-static", via: qemu }
+          - { goarch: ppc64le, exec: "-exec=qemu-ppc64le-static", via: qemu }
+          - { goarch: s390x,   exec: "-exec=qemu-s390x-static", via: qemu }
+          # 386 runs with NO emulator: a 386 ELF executes directly on the
+          # x86-64 runner. That is not a convenience, it is a correctness
+          # requirement. Measured on one commit of go-gfx/gfx, eight identical
+          # lanes each:
+          #
+          #   under qemu-i386                    5 failures out of 8
+          #   under qemu-i386, asyncpreemptoff=1 0 out of 8
+          #   native on the same runner          0 out of 8
+          #   under qemu-arm                     0 out of 8
+          #
+          # Each failure landed on a DIFFERENT input although the seed is
+          # fixed, and the wrong value was a sign flip rather than a rounding
+          # difference. qemu-i386 loses the guest's floating-point state across
+          # the signal Go delivers for asynchronous preemption. Emulating 386
+          # here would buy nothing and cost a lane that goes red at random.
+          - { goarch: "386",   exec: "", via: native }
+          - { goarch: arm,     exec: "-exec=qemu-arm-static", via: qemu }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - name: Test under qemu (${{ matrix.goarch }})
+        run: GOARCH=${{ matrix.goarch }} go test ${{ matrix.exec }} ./...

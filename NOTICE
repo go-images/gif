@@ -1,0 +1,41 @@
+go-images/gif
+
+This product includes software developed by The Go Authors
+(https://go.dev, package image/gif), licensed under the BSD 3-Clause
+licence reproduced in LICENSE. Copyright 2011 The Go Authors.
+
+This is a fork. The changes carried here are stated:
+
+  2026-09-26  DecodePartial reports what a truncated stream did decode.
+
+              Decode is all-or-nothing: a file still arriving yields a nil
+              image and "not enough image data" whatever fraction of it is
+              present, which is the same as having nothing. image/jpeg and
+              image/png answer the same way, so this is a gap in the shape
+              of every decoder rather than in one of them.
+
+              DecodePartial returns the first frame at its full declared
+              size together with the number of pixel rows that are FINISHED,
+              counting from the top.
+
+              readImageDescriptor already reads a frame's pixels with one
+              readFull, which writes what arrived before reporting that it
+              ran out -- so the rows are in the buffer and only the count
+              and the frame were discarded. The change reads with
+              io.ReadFull instead, because the COUNT is what was missing,
+              and keeps both. An INTERLACED frame records nothing, because
+              its rows arrive in passes covering the whole frame and
+              uninterlace has not run; DecodePartial then refuses it.
+
+              Only the first frame is ever reported, which costs nothing:
+              decode returns as soon as one frame is whole when it is not
+              keeping all of them, so a truncated animation whose first
+              frame arrived decodes successfully with every row.
+
+  2026-09-26  writer.go uses encoding/binary rather than internal/byteorder,
+              which is not importable outside the standard library. Two
+              calls, byte for byte the same.
+
+              Decode, DecodeAll, DecodeConfig, Encode and EncodeAll behave
+              exactly as before, and Go's own test suite passes here
+              unaltered apart from the testdata paths.
